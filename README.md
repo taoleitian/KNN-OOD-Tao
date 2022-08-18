@@ -23,7 +23,7 @@ parser.add_argument('--pick_nums', type=int, default=5, help='Number of ID sampl
 If you want to train a new model, you can execute:
 
 ```bash
-python train_KNN.py --ngpu 8 --start_epoch 32 --sample_number 1000 --epochs 60 --sample_from 1500 --select 250 --loss_weight 0.1 --dataset ImageNet-100 --pic_nums 5 --cov_mat 0.1 --K 250 --save /nobackup-slow/taoleitian/model/vos/ImageNet-100/MCM/test/1 --batch_size 1600 --learning_rate 0.1 --decay_rate 0.1
+python train_KNN.py --ngpu 8 --start_epoch 30 --sample_number 1000 --epochs 60 --sample_from 1500 --select 250 --loss_weight 0.1 --dataset ImageNet-100 --pick_nums 5 --cov_mat 0.1 --K 250 --save /nobackup-slow/taoleitian/model/vos/ImageNet-100/MCM/test/1 --batch_size 1600 --learning_rate 0.1 --decay_rate 0.1
 ```
 
 If you want to test the trained model, you can execute:

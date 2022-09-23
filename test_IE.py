@@ -9,8 +9,8 @@ import torchvision.transforms as trn
 import torchvision.datasets as dset
 import torch.nn.functional as F
 from CLIP.clip_feature_dataset import clip_feature
-from CLIP.CLIP_MCM import CLIP_MCM
-
+from CLIP.ImageEncoder import ImageEncoder
+from CLIP.image_folder import ImageSubfolder
 
 # go through rigamaroo to do ...utils.display_results import show_performance
 if __package__ is None:
@@ -76,9 +76,10 @@ if args.save ==True:
     sys.stdout = output_content
 
 # mean and standard deviation of channels of CIFAR-10 images
+resolution = 224
 test_transform = trn.Compose([
-    trn.Resize(size=(224, 224), interpolation=trn.InterpolationMode.BICUBIC),
-    trn.CenterCrop(size=(224, 224)),
+    trn.Resize(size=(resolution, resolution), interpolation=trn.InterpolationMode.BICUBIC),
+    trn.CenterCrop(size=(resolution, resolution)),
     trn.ToTensor(),
     trn.Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711))
 ])
@@ -88,9 +89,19 @@ if 'cifar10_' in args.method_name:
     test_data = dset.CIFAR10('/nobackup-slow/dataset/cifarpy', train=False, transform=test_transform)
     num_classes = 10
 elif 'ImageNet-100_' in args.method_name:
-    load_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/ImageNet-100/'+ str(num_layers)
-    test_data  = clip_feature(path=load_path+'/val/')
+    root_dir = '/nobackup-slow/dataset/ILSVRC-2012/'
+    train_dir = root_dir + 'val'
+    classes, _ = dset.folder.find_classes(train_dir)
+    index = [125, 788, 630, 535, 474, 694, 146, 914, 447, 208, 182, 621, 271, 646, 328, 119, 772, 928, 610, 891, 340,
+             890, 589, 524, 172, 453, 869, 556, 168, 982, 942, 874, 787, 320, 457, 127, 814, 358, 604, 634, 898, 388,
+             618, 306, 150, 508, 702, 323, 822, 63, 445, 927, 266, 298, 255, 44, 207, 151, 666, 868, 992, 843, 436, 131,
+             384, 908, 278, 169, 294, 428, 60, 472, 778, 304, 76, 289, 199, 152, 584, 510, 825, 236, 395, 762, 917, 573,
+             949, 696, 977, 401, 583, 10, 562, 738, 416, 637, 973, 359, 52, 708]
+
     num_classes = 100
+    classes = [classes[i] for i in index]
+    class_to_idx = {c: i for i, c in enumerate(classes)}
+    test_data = ImageSubfolder(root_dir + 'val', transform=test_transform, class_to_idx=class_to_idx)
 elif 'ImageNet-10_' in args.method_name:
     test_data = clip_feature(path='/nobackup-slow/dataset/ImageNet_OOD_dataset_feature/ImageNet-10/val/')
     num_classes = 10
@@ -101,7 +112,7 @@ else:
 test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.test_bs, shuffle=False,
                                           num_workers=args.prefetch, pin_memory=True)
 
-net = CLIP_MCM(num_classes=num_classes, layers=num_layers)
+net = ImageEncoder(num_classes=num_classes, layers=num_layers)
 start_epoch = 0
 
 # Restore model
@@ -119,7 +130,7 @@ if args.load != '':
         #model_name = os.path.join(os.path.join(args.load, subdir), args.method_name + '_epoch_' + str(i) + '.pt')
         model_name = os.path.join(args.load, args.method_name+ '_epoch_' + str(i) + '.pt')
         if os.path.isfile(model_name):
-            net.load_state_dict({k.replace('module.', ''): v for k, v in torch.load(model_name).items()},strict=False)
+            #net.load_state_dict({k.replace('module.', ''): v for k, v in torch.load(model_name).items()},strict=False)
             print('Model restored! Epoch:', i)
             start_epoch = i + 1
             break
@@ -166,8 +177,8 @@ def get_ood_scores(loader, in_dist=False, encode_feature=True):
                 _score.append(to_np((output.mean(1) - torch.logsumexp(output, dim=1))))
             else:
                 if args.score == 'energy':
-                    _score.append(-to_np((args.T*torch.logsumexp(output / args.T, dim=1))))
-                    #_score.append(-to_np(energy_score[:,:1]))
+                    #_score.append(-to_np((args.T*torch.logsumexp(output / args.T, dim=1))))
+                    _score.append(-to_np(energy_score[:,:1]))
                 else: # original MSP and Mahalanobis (but Mahalanobis won't need this returned)
                     _score.append(-np.max(smax, axis=1))
 
@@ -286,34 +297,32 @@ def get_and_print_results(ood_loader, num_to_avg=args.num_to_avg, encode_feature
 
 
 # /////////////// iNaturalist ///////////////
-ood_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/iNaturalist/'+str(num_layers)+'/'
-ood_data = clip_feature(ood_path)
+ood_path = '/nobackup-slow/dataset/ImageNet_OOD_dataset/iNaturalist'
+ood_data = dset.ImageFolder(root=ood_path, transform=test_transform)
 ood_loader = torch.utils.data.DataLoader(ood_data, batch_size=args.test_bs, shuffle=True,
                                          num_workers=4, pin_memory=True)
 print('\n\niNaturalist Detection')
 get_and_print_results(ood_loader, encode_feature=False)
 
-
-# /////////////// Places /////////////// # cropped and no sampling of the test set
-ood_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/Places/'+str(num_layers)+'/'
-ood_data = clip_feature(ood_path)
-
-ood_loader = torch.utils.data.DataLoader(ood_data, batch_size=args.test_bs, shuffle=True,
-                                         num_workers=2, pin_memory=True)
-print('\n\nPlaces Detection')
-get_and_print_results(ood_loader, encode_feature=False)
-
 # /////////////// SUN ///////////////
-ood_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/SUN/'+str(num_layers)+'/'
-ood_data = clip_feature(ood_path)
+ood_path = '/nobackup-slow/dataset/ImageNet_OOD_dataset/SUN'
+ood_data = dset.ImageFolder(root=ood_path, transform=test_transform)
 ood_loader = torch.utils.data.DataLoader(ood_data, batch_size=args.test_bs, shuffle=True,
                                          num_workers=2, pin_memory=True)
 print('\n\nSUN Detection')
 get_and_print_results(ood_loader, encode_feature=False)
 
+# /////////////// Places /////////////// # cropped and no sampling of the test set
+ood_path = '/nobackup-slow/dataset/ImageNet_OOD_dataset/Places/'
+ood_data = dset.ImageFolder(root=ood_path, transform=test_transform)
+ood_loader = torch.utils.data.DataLoader(ood_data, batch_size=args.test_bs, shuffle=True,
+                                         num_workers=2, pin_memory=True)
+print('\n\nPlaces Detection')
+get_and_print_results(ood_loader, encode_feature=False)
+
 # /////////////// Textures ///////////////
-ood_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/Textures/'+str(num_layers)+'/'
-ood_data = clip_feature(ood_path)
+ood_path = '/nobackup-slow/dataset/ImageNet_OOD_dataset/Textures/'
+ood_data = dset.ImageFolder(root=ood_path, transform=test_transform)
 ood_loader = torch.utils.data.DataLoader(ood_data, batch_size=args.test_bs, shuffle=True,
                                          num_workers=1, pin_memory=True)
 print('\n\nTextures Detection')

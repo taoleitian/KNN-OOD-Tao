@@ -9,8 +9,8 @@ import torchvision.transforms as trn
 import torchvision.datasets as dset
 import torch.nn.functional as F
 from CLIP.clip_feature_dataset import clip_feature
-from CLIP.CLIP_MCM import CLIP_MCM
-
+from CLIP.CLIP_ft import CLIP_ft
+from torch.autograd import Variable
 
 # go through rigamaroo to do ...utils.display_results import show_performance
 if __package__ is None:
@@ -20,31 +20,11 @@ if __package__ is None:
     sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
     from utils.display_results import show_performance, get_measures, print_measures, print_measures_with_std
     import utils.score_calculation as lib
-def log_sum_exp(value, energy_weight, dim=None, keepdim=False):
-    """Numerically stable implementation of the operation
 
-    value.exp().sum(dim, keepdim).log()
-    """
-    import math
-    # TODO: torch.max(value, dim=None) threw an error at time of writing
-    if dim is not None:
-        m, _ = torch.max(value, dim=dim, keepdim=True)
-        value0 = value - m
-        if keepdim is False:
-            m = m.squeeze(dim)
-        return m + torch.log(torch.sum(
-            F.relu(energy_weight)*torch.exp(value0), dim=dim, keepdim=keepdim))
-    else:
-        m = torch.max(value)
-        sum_exp = torch.sum(torch.exp(value - m))
-        # if isinstance(sum_exp, Number):
-        #     return m + math.log(sum_exp)
-        # else:
-        return m + torch.log(sum_exp)
 parser = argparse.ArgumentParser(description='Evaluates a CIFAR OOD Detector',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 # Setup
-parser.add_argument('--test_bs', type=int, default=256)
+parser.add_argument('--test_bs', type=int, default=1)
 parser.add_argument('--num_to_avg', type=int, default=1, help='Average measures across num_to_avg runs.')
 parser.add_argument('--validate', '-v', action='store_true', help='Evaluate performance on validation distributions.')
 parser.add_argument('--use_xent', '-x', action='store_true', help='Use cross entropy scoring instead of the MSP.')
@@ -101,7 +81,7 @@ else:
 test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.test_bs, shuffle=False,
                                           num_workers=args.prefetch, pin_memory=True)
 
-net = CLIP_MCM(num_classes=num_classes, layers=num_layers)
+net = CLIP_ft(num_classes=num_classes, layers=num_layers)
 start_epoch = 0
 
 # Restore model
@@ -145,44 +125,81 @@ expected_ap = ood_num_examples / (ood_num_examples + len(test_data))
 
 concat = lambda x: np.concatenate(x, axis=0)
 to_np = lambda x: x.data.cpu().numpy()
+
+def iterate_data_gradnorm(data_loader, model, temperature, num_classes):
+    confs = []
+    logsoftmax = torch.nn.LogSoftmax(dim=-1).cuda()
+    for b, (x, y) in enumerate(data_loader):
+        if b % 100 == 0:
+            print('{} batches processed'.format(b))
+        inputs = Variable(x.cuda(), requires_grad=True)
+
+        model.zero_grad()
+        outputs, _, _ = model(inputs)
+        targets = torch.ones((inputs.shape[0], num_classes)).cuda()
+        outputs = outputs / temperature
+        loss = torch.mean(torch.sum(-targets * logsoftmax(outputs), dim=-1)).view(-1,1)
+
+        loss.backward()
+
+        layer_grad = model.head.conv.weight.grad.data
+
+        layer_grad_norm = torch.sum(torch.abs(layer_grad)).cpu().numpy()
+        confs.append(layer_grad_norm)
+
+    return np.array(confs)
+
 def get_ood_scores(loader, in_dist=False, encode_feature=True):
     _score = []
     _right_score = []
     _wrong_score = []
+    logsoftmax = torch.nn.LogSoftmax(dim=-1).cuda()
+    temperature = 1.
+    #with torch.no_grad():
+    for batch_idx, (data, target) in enumerate(loader):
+        if batch_idx >= ood_num_examples // args.test_bs and in_dist is False:
+            break
 
-    with torch.no_grad():
-        for batch_idx, (data, target) in enumerate(loader):
-            if batch_idx >= ood_num_examples // args.test_bs and in_dist is False:
-                break
+        #data = data.cuda()
+        inputs = Variable(data.cuda(), requires_grad=True)
+        net.zero_grad()
+        output, _, energy_score = net(inputs)
+        targets = torch.ones((inputs.shape[0], num_classes)).cuda()
+        output = output / temperature
+        loss = torch.mean(torch.sum(-targets * logsoftmax(output), dim=-1))
+        loss.backward()
 
-            data = data.cuda()
+        layer_grad = net.fc.weight.grad.data
 
-            output, _, energy_score = net(data)
-
-            smax = to_np(F.softmax(output, dim=1))
+        layer_grad_norm = torch.sum(torch.abs(layer_grad)).view(1, -1).cpu().numpy()
+        #print(layer_grad_norm.shape)
+        smax = to_np(F.softmax(output, dim=1))
             #output = F.softmax(output / 100, dim=1)
 
-            if args.use_xent:
-                _score.append(to_np((output.mean(1) - torch.logsumexp(output, dim=1))))
-            else:
-                if args.score == 'energy':
-                    _score.append(-to_np((args.T*torch.logsumexp(output / args.T, dim=1))))
+        if args.use_xent:
+            _score.append(to_np((output.mean(1) - torch.logsumexp(output, dim=1))))
+        else:
+            if args.score == 'energy':
+                _score.append(-to_np((args.T*torch.logsumexp(output / args.T, dim=1))))
                     #_score.append(-to_np(energy_score[:,:1]))
-                else: # original MSP and Mahalanobis (but Mahalanobis won't need this returned)
-                    _score.append(-np.max(smax, axis=1))
+            elif args.score == 'GradNorm':
+                _score.append(layer_grad_norm)
+                    #_score.append(-to_np(energy_score[:,:1]))
+            else: # original MSP and Mahalanobis (but Mahalanobis won't need this returned)
+                _score.append(-np.max(smax, axis=1))
 
-            if in_dist:
-                preds = np.argmax(smax, axis=1)
-                targets = target.numpy().squeeze()
-                right_indices = preds == targets
-                wrong_indices = np.invert(right_indices)
+        if in_dist:
+            preds = np.argmax(smax, axis=1)
+            targets = target.numpy().squeeze()
+            right_indices = preds == targets
+            wrong_indices = np.invert(right_indices)
 
-                if args.use_xent:
-                    _right_score.append(to_np((output.mean(1) - torch.logsumexp(output, dim=1)))[right_indices])
-                    _wrong_score.append(to_np((output.mean(1) - torch.logsumexp(output, dim=1)))[wrong_indices])
-                else:
-                    _right_score.append(-np.max(smax[right_indices], axis=1))
-                    _wrong_score.append(-np.max(smax[wrong_indices], axis=1))
+            if args.use_xent:
+                _right_score.append(to_np((output.mean(1) - torch.logsumexp(output, dim=1)))[right_indices])
+                _wrong_score.append(to_np((output.mean(1) - torch.logsumexp(output, dim=1)))[wrong_indices])
+            else:
+                _right_score.append(-np.max(smax[right_indices], axis=1))
+                _wrong_score.append(-np.max(smax[wrong_indices], axis=1))
 
 
     if in_dist:

@@ -64,6 +64,7 @@ parser.add_argument('--num_layers', type=int, default=10, help='The number of la
 parser.add_argument('--sample_number', type=int, default=1000, help='number of standard Gaussian noise samples')
 parser.add_argument('--select', type=int, default=50, help='How many ID samples to pick to define as points near the boundary of the sample space')
 parser.add_argument('--sample_from', type=int, default=1000, help='Number of IDs per class used to estimate OOD data.')
+parser.add_argument('--T', type=int, default=10., help='temperature value')
 parser.add_argument('--K', type=int, default=100, help='The value of top-K to calculate the KNN distance')
 parser.add_argument('--loss_weight', type=float, default=0.1, help='The weight of outlier loss')
 parser.add_argument('--decay_rate', type=float, default=0.1, help='Learning rate decay ratio for MLP outlier')
@@ -71,7 +72,6 @@ parser.add_argument('--cov_mat', type=float, default=0.1, help='The weight befor
 parser.add_argument('--sampling_ratio', type=float, default=1., help='What proportion of points to choose to calculate the KNN value')
 parser.add_argument('--ID_points_num', type=int, default=2, help='the number of synthetic outliers extracted for each selected ID')
 parser.add_argument('--pick_nums', type=int, default=5, help='Number of ID samples used to generate outliers')
-parser.add_argument('--T', type=float, default=8., help='temperature')
 
 
 
@@ -131,7 +131,7 @@ test_loader = torch.utils.data.DataLoader(
     num_workers=args.prefetch, pin_memory=True)
 
 net = CLIP_MCM(num_classes=num_classes, layers=num_layers)
-net.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('/nobackup-slow/taoleitian/model/vos/ImageNet-100/MCM/K/400/ImageNet-100_dense_baseline_dense_epoch_19.pt').items()}, strict=True)
+#net.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('/nobackup-slow/taoleitian/model/vos/ImageNet-100/MCM/10/ft/5/ImageNet-100_dense_baseline_dense_epoch_31.pt').items()}, strict=False)
 
 
 
@@ -148,9 +148,8 @@ if args.dataset == 'cifar10':
 else:
     num_classes = 100
 
-number_dict = {}
-for i in range(num_classes):
-    number_dict[i] = 0
+number_dict = 0
+
 eye_matrix = torch.eye(512)
 #logistic_regression = torch.nn.Linear(1, 2)
 #logistic_regression = logistic_regression
@@ -158,7 +157,7 @@ optimizer = torch.optim.SGD([
     {"params":net.ln_post.parameters()},
     {"params": net.transformer_resblocks.parameters()},
     {"params": net.proj},
-    {"params": net.outlier_MLP.parameters(), "lr": state['learning_rate'] * args.decay_rate},
+    {"params": net.weight_energy.parameters(), "lr": state['learning_rate'] * args.decay_rate},
     ],
     lr=state['learning_rate'],
     momentum=state['momentum'],
@@ -182,15 +181,15 @@ def cosine_annealing(step, total_steps, lr_max, lr_min):
 
 # /////////////// Training ///////////////
 
-def train(epoch, ood_list, data_dict):
+def train(epoch, ood_list):
     net.train()  # enter train mode
     loss_avg = 0.0
     lr_reg_loss_avg = 0.0
-
+    data_dict = torch.zeros(num_classes*args.sample_number, 512).cuda()
     res = faiss.StandardGpuResources()
     KNN_index = faiss.GpuIndexFlatL2(res, 512)
-    criterion = LogitNormLoss(t=args.T)
-
+    criterion = LogitNormLoss()
+    sum_temp = 0
     for idx, (data, target) in enumerate(train_loader):
         data, target = data.cuda(), target.cuda()
 
@@ -199,22 +198,15 @@ def train(epoch, ood_list, data_dict):
 
         # energy regularization.
         sum_temp = 0
-        for index in range(num_classes):
-            sum_temp += number_dict[index]
+
         lr_reg_loss = torch.zeros(1).cuda()[0]
         if sum_temp == num_classes * args.sample_number and epoch < args.start_epoch:
             # maintaining an ID data queue for each class.
-            target_numpy = target.cpu().data.numpy()
-            for index in range(len(target)):
-                dict_key = target_numpy[index]
-                data_dict[dict_key] = torch.cat((data_dict[dict_key][1:],
-                                                      output[index].detach().view(1, -1)), 0)
+            data_dict[sum_temp:sum_temp + len(output)] = output.detach()
+            sum_temp += len(output)
         elif sum_temp == num_classes * args.sample_number and epoch >= args.start_epoch:
-            target_numpy = target.cpu().data.numpy()
-            for index in range(len(target)):
-                dict_key = target_numpy[index]
-                data_dict[dict_key] = torch.cat((data_dict[dict_key][1:],
-                                                      output[index].detach().view(1, -1)), 0)
+            data_dict[sum_temp:sum_temp + len(output)] = output.detach()
+            sum_temp += len(output)
             # Standard Gaussian distribution
             new_dis = MultivariateNormal(torch.zeros(512).cuda(), torch.eye(512).cuda())
             negative_samples = new_dis.rsample((args.sample_from,))
@@ -232,7 +224,7 @@ def train(epoch, ood_list, data_dict):
                     if epoch >= 2:
                         ood_list.append(ood_samples.detach().cpu())
                     if epoch >= 2:
-                        torch.save(data_dict[index].detach().cpu(), 'ID_features.pt')
+                        torch.save(data_dict[index].detach().cpu(), 'clip_ID_3.pt')
                     '''
                 else:
                     ood_samples = torch.cat((ood_samples, sample_point), 0)
@@ -246,12 +238,9 @@ def train(epoch, ood_list, data_dict):
                 lr_reg_loss = criterion_BCE(input_for_lr.view(-1), labels_for_lr)
 
         else:
-            target_numpy = target.cpu().data.numpy()
-            for index in range(len(target)):
-                dict_key = target_numpy[index]
-                if number_dict[dict_key] < args.sample_number:
-                    data_dict[dict_key][number_dict[dict_key]] = output[index].detach()
-                    number_dict[dict_key] += 1
+            if sum_temp < args.sample_number:
+                data_dict[sum_temp:sum_temp+len(output)] = output.detach()
+                sum_temp += len(output)
 
         # backward
         optimizer.zero_grad()
@@ -269,7 +258,6 @@ def train(epoch, ood_list, data_dict):
     scheduler.step()
     state['train_loss'] = loss_avg
     state['lr_reg_loss'] = lr_reg_loss_avg
-    return data_dict
 
 # test function
 def test():
@@ -317,12 +305,12 @@ print('Beginning Training\n')
 ood_list = []
 # Main loop
 #data_dict = torch.zeros(num_classes, args.sample_number, 512).cuda()
-data_dict = torch.zeros(num_classes, args.sample_number, 512).cuda()
+
 for epoch in range(start_epoch, args.epochs):
     state['epoch'] = epoch
     begin_epoch = time.time()
 
-    data_dict = train(epoch, ood_list, data_dict)
+    train(epoch, ood_list)
     test()
 
 
@@ -363,4 +351,4 @@ for epoch in range(start_epoch, args.epochs):
         state['lr_reg_loss'])
     )
 #ood_data = torch.cat(ood_list, dim=0)
-#torch.save(ood_data, 'outliers.pt')
+#torch.save(ood_data, 'clip_outliers_3.pt')

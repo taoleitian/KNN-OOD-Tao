@@ -9,7 +9,7 @@ import torchvision.transforms as trn
 import torchvision.datasets as dset
 import torch.nn.functional as F
 from CLIP.clip_feature_dataset import clip_feature
-from CLIP.CLIP_MCM import CLIP_MCM
+from CLIP.CLIP_prototype import CLIP_prototype
 
 
 # go through rigamaroo to do ...utils.display_results import show_performance
@@ -101,7 +101,7 @@ else:
 test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.test_bs, shuffle=False,
                                           num_workers=args.prefetch, pin_memory=True)
 
-net = CLIP_MCM(num_classes=num_classes, layers=num_layers)
+net = CLIP_prototype(num_classes=num_classes, layers=num_layers)
 start_epoch = 0
 
 # Restore model

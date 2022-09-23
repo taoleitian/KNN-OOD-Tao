@@ -131,7 +131,7 @@ test_loader = torch.utils.data.DataLoader(
 
 net = CLIP_MCM(num_classes=num_classes, layers=num_layers)
 #net.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('/nobackup-slow/taoleitian/model/vos/ImageNet-100/MCM/10/sample_from/1500/ImageNet-100_dense_baseline_dense_epoch_19.pt').items()}, strict=False)
-net.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('/nobackup-slow/taoleitian/model/vos/ImageNet-100/MCM/10/ft/5/ImageNet-100_dense_baseline_dense_epoch_31.pt').items()}, strict=False)
+#net.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('/nobackup-slow/taoleitian/model/vos/ImageNet-100/MCM/10/ft/5/ImageNet-100_dense_baseline_dense_epoch_31.pt').items()}, strict=False)
 
 '''# Create model
 if args.model == 'allconv':
@@ -160,16 +160,14 @@ eye_matrix = torch.eye(512)
 #logistic_regression = torch.nn.Linear(1, 2)
 #logistic_regression = logistic_regression
 optimizer = torch.optim.SGD([
-    {"params":net.ln_post.parameters(), "lr":state['learning_rate']*args.decay_rate},
-    #{"params":net.transformer_resblocks_one.parameters(), "lr":state['learning_rate']*args.decay_rate},
-    #{"params": net.transformer_resblocks_two.parameters(), "lr": state['learning_rate'] * args.decay_rate},
-    {"params": net.transformer_resblocks.parameters(), "lr": state['learning_rate'] * args.decay_rate},
-    {"params": net.proj, "lr": state['learning_rate'] * args.decay_rate},
+    {"params":net.ln_post.parameters()},
+    {"params": net.transformer_resblocks.parameters()},
+    {"params": net.proj},
 
     #{"params": net.fc.parameters()},
     #{"params": net.MLP.parameters()},
     #{"params": net.MLP_text.parameters()},
-    {"params": net.weight_energy.parameters()},
+    {"params": net.weight_energy.parameters(), "lr": state['learning_rate'] * args.decay_rate},
     ],
     lr=state['learning_rate'],
     momentum=state['momentum'],

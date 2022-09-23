@@ -9,13 +9,8 @@ import torch.backends.cudnn as cudnn
 import torchvision.transforms as trn
 import torchvision.datasets as dset
 import torch.nn.functional as F
-# from models.wrn import WideResNet
-# from models.densenet import DenseNet3
-from models.wrn_virtual import WideResNet
-from models.densenet_KNN import DenseNet3
-#from models.densenet import DenseNet3
-from skimage.filters import gaussian as gblur
-from PIL import Image as PILImage
+
+from CLIP.ResNet import ResNet
 
 # go through rigamaroo to do ...utils.display_results import show_performance
 if __package__ is None:
@@ -56,10 +51,12 @@ print(args)
 # np.random.seed(1)
 
 # mean and standard deviation of channels of CIFAR-10 images
-mean = [x / 255 for x in [125.3, 123.0, 113.9]]
-std = [x / 255 for x in [63.0, 62.1, 66.7]]
-
-test_transform = trn.Compose([trn.ToTensor(), trn.Normalize(mean, std)])
+test_transform = trn.Compose([
+    trn.Resize(size=(224, 224), interpolation=trn.InterpolationMode.BICUBIC),
+    trn.CenterCrop(size=(224, 224)),
+    trn.ToTensor(),
+    trn.Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711))
+])
 
 if 'cifar10_' in args.method_name:
     test_data = dset.CIFAR10('/nobackup-slow/dataset/cifarpy', train=False, transform=test_transform)
@@ -72,15 +69,12 @@ else:
 test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.test_bs, shuffle=False,
                                           num_workers=args.prefetch, pin_memory=True)
 
-# Create model
-if args.model_name == 'res':
-    net = WideResNet(args.layers, num_classes, args.widen_factor, dropRate=args.droprate)
-else:
-    net = DenseNet3(100, num_classes, 12, reduction=0.5, bottleneck=True, dropRate=0.0, normalizer=None,
-                         k=None, info=None)
+net = ResNet()
+
 start_epoch = 0
 
 # Restore model
+'''
 if args.load != '':
     for i in range(1000 - 1, -1, -1):
         if 'pretrained' in args.method_name:
@@ -104,7 +98,7 @@ if args.load != '':
             break
     if start_epoch == 0:
         assert False, "could not resume "+model_name
-
+'''
 net.eval()
 
 if args.ngpu > 1:
@@ -247,8 +241,7 @@ def get_and_print_results(ood_loader, num_to_avg=args.num_to_avg):
 
 # /////////////// Textures ///////////////
 ood_data = dset.ImageFolder(root="/nobackup-slow/dataset/dtd/images",
-                            transform=trn.Compose([trn.Resize(32), trn.CenterCrop(32),
-                                                   trn.ToTensor(), trn.Normalize(mean, std)]))
+                            transform=test_transform)
 ood_loader = torch.utils.data.DataLoader(ood_data, batch_size=args.test_bs, shuffle=True,
                                          num_workers=4, pin_memory=True)
 print('\n\nTexture Detection')
@@ -256,9 +249,7 @@ get_and_print_results(ood_loader)
 
 # /////////////// SVHN /////////////// # cropped and no sampling of the test set
 ood_data = svhn.SVHN(root='/nobackup-slow/dataset/svhn/', split="test",
-                     transform=trn.Compose(
-                         [#trn.Resize(32),
-                         trn.ToTensor(), trn.Normalize(mean, std)]), download=False)
+                     transform=test_transform, download=False)
 ood_loader = torch.utils.data.DataLoader(ood_data, batch_size=args.test_bs, shuffle=True,
                                          num_workers=2, pin_memory=True)
 print('\n\nSVHN Detection')
@@ -266,8 +257,7 @@ get_and_print_results(ood_loader)
 
 # /////////////// Places365 ///////////////
 ood_data = dset.ImageFolder(root="/nobackup-slow/dataset/places365_test/",
-                            transform=trn.Compose([trn.Resize(32), trn.CenterCrop(32),
-                                                   trn.ToTensor(), trn.Normalize(mean, std)]))
+                            transform=test_transform)
 ood_loader = torch.utils.data.DataLoader(ood_data, batch_size=args.test_bs, shuffle=True,
                                          num_workers=2, pin_memory=True)
 print('\n\nPlaces365 Detection')
@@ -275,7 +265,7 @@ get_and_print_results(ood_loader)
 
 # /////////////// LSUN-C ///////////////
 ood_data = dset.ImageFolder(root="/nobackup-slow/dataset/LSUN_C",
-                            transform=trn.Compose([trn.ToTensor(), trn.Normalize(mean, std)]))
+                            transform=test_transform)
 ood_loader = torch.utils.data.DataLoader(ood_data, batch_size=args.test_bs, shuffle=True,
                                          num_workers=1, pin_memory=True)
 print('\n\nLSUN_C Detection')
@@ -283,7 +273,7 @@ get_and_print_results(ood_loader)
 
 # /////////////// LSUN-R ///////////////
 ood_data = dset.ImageFolder(root="/nobackup-slow/dataset/LSUN_resize",
-                            transform=trn.Compose([trn.ToTensor(), trn.Normalize(mean, std)]))
+                            transform=test_transform)
 ood_loader = torch.utils.data.DataLoader(ood_data, batch_size=args.test_bs, shuffle=True,
                                          num_workers=1, pin_memory=True)
 print('\n\nLSUN_Resize Detection')
@@ -291,7 +281,7 @@ get_and_print_results(ood_loader)
 
 # /////////////// iSUN ///////////////
 ood_data = dset.ImageFolder(root="/nobackup-slow/dataset/iSUN",
-                            transform=trn.Compose([trn.ToTensor(), trn.Normalize(mean, std)]))
+                            transform=test_transform)
 ood_loader = torch.utils.data.DataLoader(ood_data, batch_size=args.test_bs, shuffle=True,
                                          num_workers=1, pin_memory=True)
 print('\n\niSUN Detection')

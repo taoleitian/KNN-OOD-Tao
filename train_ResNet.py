@@ -12,8 +12,9 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from KNN.KNN import generate_outliers, generate_outliers_rand
 from models.densenet import DenseNet3
+from CLIP.CLIP_ft import clipnet_ft
 from CLIP.CLIP_model import clipnet
-from CLIP.CLIP_MCM import CLIP_MCM
+from CLIP.CLIP_ResNet import CLIP_ResNet
 from CLIP.clip_feature_dataset import clip_feature
 import torchvision.transforms as trn
 from CLIP.logitnorm_loss import LogitNormLoss
@@ -64,6 +65,7 @@ parser.add_argument('--num_layers', type=int, default=10, help='The number of la
 parser.add_argument('--sample_number', type=int, default=1000, help='number of standard Gaussian noise samples')
 parser.add_argument('--select', type=int, default=50, help='How many ID samples to pick to define as points near the boundary of the sample space')
 parser.add_argument('--sample_from', type=int, default=1000, help='Number of IDs per class used to estimate OOD data.')
+parser.add_argument('--T', type=int, default=10., help='temperature value')
 parser.add_argument('--K', type=int, default=100, help='The value of top-K to calculate the KNN distance')
 parser.add_argument('--loss_weight', type=float, default=0.1, help='The weight of outlier loss')
 parser.add_argument('--decay_rate', type=float, default=0.1, help='Learning rate decay ratio for MLP outlier')
@@ -71,7 +73,6 @@ parser.add_argument('--cov_mat', type=float, default=0.1, help='The weight befor
 parser.add_argument('--sampling_ratio', type=float, default=1., help='What proportion of points to choose to calculate the KNN value')
 parser.add_argument('--ID_points_num', type=int, default=2, help='the number of synthetic outliers extracted for each selected ID')
 parser.add_argument('--pick_nums', type=int, default=5, help='Number of ID samples used to generate outliers')
-parser.add_argument('--T', type=float, default=8., help='temperature')
 
 
 
@@ -103,7 +104,7 @@ if args.dataset == 'cifar10':
     test_data = dset.CIFAR10('/nobackup-slow/dataset/my_xfdu/cifarpy', train=False, transform=test_transform, download=True)
     num_classes = 10
 elif args.dataset == 'ImageNet-100':
-    load_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/ImageNet-100/'+ str(num_layers)
+    load_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/ResNet/ImageNet-100'
     #load_path = '/afs/cs.wisc.edu/u/t/a/taoleitian/private/code/dataset/ImageNet-100/'
     train_data = clip_feature(path=load_path+'/train/')
     test_data  = clip_feature(path=load_path+'/val/')
@@ -130,8 +131,8 @@ test_loader = torch.utils.data.DataLoader(
     test_data, batch_size=args.test_bs, shuffle=False,
     num_workers=args.prefetch, pin_memory=True)
 
-net = CLIP_MCM(num_classes=num_classes, layers=num_layers)
-net.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('/nobackup-slow/taoleitian/model/vos/ImageNet-100/MCM/K/400/ImageNet-100_dense_baseline_dense_epoch_19.pt').items()}, strict=True)
+net = CLIP_ResNet(num_classes=num_classes, layers=num_layers)
+net.load_state_dict({k.replace('module.', ''): v for k, v in torch.load('/nobackup-slow/taoleitian/model/vos/ImageNet-100/MCM/ResNet/NPOS_2/ImageNet-100_dense_baseline_dense_epoch_9.pt').items()}, strict=False)
 
 
 
@@ -151,14 +152,11 @@ else:
 number_dict = {}
 for i in range(num_classes):
     number_dict[i] = 0
-eye_matrix = torch.eye(512)
 #logistic_regression = torch.nn.Linear(1, 2)
 #logistic_regression = logistic_regression
 optimizer = torch.optim.SGD([
-    {"params":net.ln_post.parameters()},
-    {"params": net.transformer_resblocks.parameters()},
-    {"params": net.proj},
-    {"params": net.outlier_MLP.parameters(), "lr": state['learning_rate'] * args.decay_rate},
+    {"params": net.attnpool.parameters()},
+    {"params": net.weight_energy.parameters(), "lr": state['learning_rate'] * args.decay_rate},
     ],
     lr=state['learning_rate'],
     momentum=state['momentum'],
@@ -182,14 +180,14 @@ def cosine_annealing(step, total_steps, lr_max, lr_min):
 
 # /////////////// Training ///////////////
 
-def train(epoch, ood_list, data_dict):
+def train(epoch, ood_list):
     net.train()  # enter train mode
     loss_avg = 0.0
     lr_reg_loss_avg = 0.0
-
+    data_dict = torch.zeros(num_classes, args.sample_number, 1024).cuda()
     res = faiss.StandardGpuResources()
-    KNN_index = faiss.GpuIndexFlatL2(res, 512)
-    criterion = LogitNormLoss(t=args.T)
+    KNN_index = faiss.GpuIndexFlatL2(res, 1024)
+    criterion = LogitNormLoss()
 
     for idx, (data, target) in enumerate(train_loader):
         data, target = data.cuda(), target.cuda()
@@ -216,14 +214,14 @@ def train(epoch, ood_list, data_dict):
                 data_dict[dict_key] = torch.cat((data_dict[dict_key][1:],
                                                       output[index].detach().view(1, -1)), 0)
             # Standard Gaussian distribution
-            new_dis = MultivariateNormal(torch.zeros(512).cuda(), torch.eye(512).cuda())
+            new_dis = MultivariateNormal(torch.zeros(1024).cuda(), torch.eye(1024).cuda())
             negative_samples = new_dis.rsample((args.sample_from,))
             for index in range(num_classes):
                 ID = data_dict[index]
                 #start_time = time.time()
                 sample_point = generate_outliers(ID, input_index=KNN_index,
                                                  negative_samples=negative_samples, ID_points_num=2, K=args.K, select=args.select,
-                                                 cov_mat=args.cov_mat, sampling_ratio=1.0, pic_nums=args.pick_nums, depth=512)
+                                                 cov_mat=args.cov_mat, sampling_ratio=1.0, pic_nums=args.pick_nums, depth=1024)
                 #end_time = time.time()
                 #print("time cost:", float(end_time - start_time) * 1000.0, "ms")
                 if index == 0:
@@ -232,7 +230,7 @@ def train(epoch, ood_list, data_dict):
                     if epoch >= 2:
                         ood_list.append(ood_samples.detach().cpu())
                     if epoch >= 2:
-                        torch.save(data_dict[index].detach().cpu(), 'ID_features.pt')
+                        torch.save(data_dict[index].detach().cpu(), 'clip_ID_3.pt')
                     '''
                 else:
                     ood_samples = torch.cat((ood_samples, sample_point), 0)
@@ -269,7 +267,6 @@ def train(epoch, ood_list, data_dict):
     scheduler.step()
     state['train_loss'] = loss_avg
     state['lr_reg_loss'] = lr_reg_loss_avg
-    return data_dict
 
 # test function
 def test():
@@ -317,12 +314,12 @@ print('Beginning Training\n')
 ood_list = []
 # Main loop
 #data_dict = torch.zeros(num_classes, args.sample_number, 512).cuda()
-data_dict = torch.zeros(num_classes, args.sample_number, 512).cuda()
+
 for epoch in range(start_epoch, args.epochs):
     state['epoch'] = epoch
     begin_epoch = time.time()
 
-    data_dict = train(epoch, ood_list, data_dict)
+    train(epoch, ood_list)
     test()
 
 
@@ -363,4 +360,4 @@ for epoch in range(start_epoch, args.epochs):
         state['lr_reg_loss'])
     )
 #ood_data = torch.cat(ood_list, dim=0)
-#torch.save(ood_data, 'outliers.pt')
+#torch.save(ood_data, 'clip_outliers_3.pt')

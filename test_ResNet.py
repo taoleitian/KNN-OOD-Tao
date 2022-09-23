@@ -9,7 +9,7 @@ import torchvision.transforms as trn
 import torchvision.datasets as dset
 import torch.nn.functional as F
 from CLIP.clip_feature_dataset import clip_feature
-from CLIP.CLIP_MCM import CLIP_MCM
+from CLIP.CLIP_ResNet import CLIP_ResNet
 
 
 # go through rigamaroo to do ...utils.display_results import show_performance
@@ -88,7 +88,7 @@ if 'cifar10_' in args.method_name:
     test_data = dset.CIFAR10('/nobackup-slow/dataset/cifarpy', train=False, transform=test_transform)
     num_classes = 10
 elif 'ImageNet-100_' in args.method_name:
-    load_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/ImageNet-100/'+ str(num_layers)
+    load_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/ResNet/ImageNet-100'
     test_data  = clip_feature(path=load_path+'/val/')
     num_classes = 100
 elif 'ImageNet-10_' in args.method_name:
@@ -101,7 +101,7 @@ else:
 test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.test_bs, shuffle=False,
                                           num_workers=args.prefetch, pin_memory=True)
 
-net = CLIP_MCM(num_classes=num_classes, layers=num_layers)
+net = CLIP_ResNet(num_classes=num_classes, layers=num_layers)
 start_epoch = 0
 
 # Restore model
@@ -119,7 +119,7 @@ if args.load != '':
         #model_name = os.path.join(os.path.join(args.load, subdir), args.method_name + '_epoch_' + str(i) + '.pt')
         model_name = os.path.join(args.load, args.method_name+ '_epoch_' + str(i) + '.pt')
         if os.path.isfile(model_name):
-            net.load_state_dict({k.replace('module.', ''): v for k, v in torch.load(model_name).items()},strict=False)
+            #net.load_state_dict({k.replace('module.', ''): v for k, v in torch.load(model_name).items()},strict=False)
             print('Model restored! Epoch:', i)
             start_epoch = i + 1
             break
@@ -286,7 +286,7 @@ def get_and_print_results(ood_loader, num_to_avg=args.num_to_avg, encode_feature
 
 
 # /////////////// iNaturalist ///////////////
-ood_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/iNaturalist/'+str(num_layers)+'/'
+ood_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/ResNet/iNaturalist/'
 ood_data = clip_feature(ood_path)
 ood_loader = torch.utils.data.DataLoader(ood_data, batch_size=args.test_bs, shuffle=True,
                                          num_workers=4, pin_memory=True)
@@ -295,7 +295,7 @@ get_and_print_results(ood_loader, encode_feature=False)
 
 
 # /////////////// Places /////////////// # cropped and no sampling of the test set
-ood_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/Places/'+str(num_layers)+'/'
+ood_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/ResNet/Places/'
 ood_data = clip_feature(ood_path)
 
 ood_loader = torch.utils.data.DataLoader(ood_data, batch_size=args.test_bs, shuffle=True,
@@ -304,7 +304,7 @@ print('\n\nPlaces Detection')
 get_and_print_results(ood_loader, encode_feature=False)
 
 # /////////////// SUN ///////////////
-ood_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/SUN/'+str(num_layers)+'/'
+ood_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/ResNet/SUN/'
 ood_data = clip_feature(ood_path)
 ood_loader = torch.utils.data.DataLoader(ood_data, batch_size=args.test_bs, shuffle=True,
                                          num_workers=2, pin_memory=True)
@@ -312,7 +312,7 @@ print('\n\nSUN Detection')
 get_and_print_results(ood_loader, encode_feature=False)
 
 # /////////////// Textures ///////////////
-ood_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/Textures/'+str(num_layers)+'/'
+ood_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/ResNet/Textures/'
 ood_data = clip_feature(ood_path)
 ood_loader = torch.utils.data.DataLoader(ood_data, batch_size=args.test_bs, shuffle=True,
                                          num_workers=1, pin_memory=True)

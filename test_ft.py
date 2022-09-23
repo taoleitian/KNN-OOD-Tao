@@ -8,12 +8,10 @@ import torch.backends.cudnn as cudnn
 import torchvision.transforms as trn
 import torchvision.datasets as dset
 import torch.nn.functional as F
-from CLIP.CLIP_ft import clipnet_ft
+from CLIP.CLIP_ft import CLIP_ft
 from CLIP.clip_feature_dataset import clip_feature
-from models.wrn_virtual import WideResNet
-from models.densenet import DenseNet3
-from skimage.filters import gaussian as gblur
-from PIL import Image as PILImage
+from CLIP.clip_feature_file import clip_feature_file_dataset
+
 
 # go through rigamaroo to do ...utils.display_results import show_performance
 if __package__ is None:
@@ -56,7 +54,7 @@ parser.add_argument('--method_name', '-m', type=str, default='cifar10_allconv_ba
 parser.add_argument('--layers', default=40, type=int, help='total number of layers')
 parser.add_argument('--widen-factor', default=2, type=int, help='widen factor')
 parser.add_argument('--droprate', default=0.3, type=float, help='dropout probability')
-parser.add_argument('--load', '-l', type=str, default='/nobackup-slow/taoleitian/model/vos/ImageNet-100/temp/0.1_2/', help='Checkpoint path to resume / test.')
+parser.add_argument('--load', '-l', type=str, default='/nobackup-slow/taoleitian/model/vos/ImageNet-100/MCM/vis/4/', help='Checkpoint path to resume / test.')
 parser.add_argument('--ngpu', type=int, default=1, help='0 = CPU.')
 parser.add_argument('--prefetch', type=int, default=2, help='Pre-fetching threads.')
 # EG and benchmark details
@@ -94,6 +92,9 @@ elif 'ImageNet-100_' in args.method_name:
     load_path = '/nobackup-slow/taoleitian/CLIP_visual_feature/ImageNet-100/'+ str(num_layers)
     test_data  = clip_feature(path=load_path+'/val/')
     num_classes = 100
+elif 'ImageNet-1000_' in args.method_name:
+    test_data = clip_feature_file_dataset(path='/nobackup-fast/ImageNet-1k_CLIP/path/10_val.txt')
+    num_classes = 1000
 elif 'ImageNet-10_' in args.method_name:
     test_data = clip_feature(path='/nobackup-slow/dataset/ImageNet_OOD_dataset_feature/ImageNet-10/val/')
     num_classes = 10
@@ -104,7 +105,7 @@ else:
 test_loader = torch.utils.data.DataLoader(test_data, batch_size=args.test_bs, shuffle=False,
                                           num_workers=args.prefetch, pin_memory=True)
 
-net = clipnet_ft(num_classes=num_classes, layers=num_layers)
+net = CLIP_ft(num_classes=num_classes, layers=num_layers)
 start_epoch = 0
 
 # Restore model
@@ -162,8 +163,8 @@ def get_ood_scores(loader, in_dist=False, encode_feature=True):
 
             output, _, energy_score = net(data)
 
-            #energy_score = F.sigmoid(energy_score)
             smax = to_np(F.softmax(output, dim=1))
+            #output = F.softmax(output / 100, dim=1)
 
             if args.use_xent:
                 _score.append(to_np((output.mean(1) - torch.logsumexp(output, dim=1))))
